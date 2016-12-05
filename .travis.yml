@@ -16,4 +16,4 @@ services:
   - mysql
 
 script:
-  - pytest
+  - py.test
