@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import time
+import pytest
 from sqlalchemy import create_engine, Column, String, Integer, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 
@@ -27,24 +28,29 @@ class User(Base):
     created_at = Column(DateTime, default=_get_timestamp)
 
 
-def test_cache():
+@pytest.fixture
+def init_db():
+    User.__table__.create(engine)
+    user = User(id=1, name="root", desc="test", count=0, created_at=_get_timestamp)
+    session.add(user)
+    session.commit()
+
+
+def test_sqlalchemy_cache(init_db):
+
+    # query
     query = session.query(User).filter_by(name='root')
     cache_query = query.options(FromCache(cache))
     
     # no cache
-    print query.one().count
+    name = query.one().name
+    assert name == "root"
 
     # cache
-    print cache_query.one().count
+    cache_name = cache_query.one().name
+    assert cache_name == "root"
 
     # invalidate cache 
-    print cache_query.invalidate()
-
-
-def main():
-    #Base.metadata.create_all(engine)
-    test_cache()
-
-
-if __name__ == '__main__':
-    main()
+    cache_query.invalidate()
+    key = cache_query.key_from_query()
+    assert cache.get(key) == None

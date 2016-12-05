@@ -1,0 +1,19 @@
+sudo: required
+
+language: python
+
+python:
+  - "2.7"
+
+before_install:
+  - mysql -e "create database IF NOT EXISTS test;" -uroot
+
+install:
+  - pip install requirements.txt
+
+services:
+  - redis-server
+  - mysql
+
+script:
+  - pytest
