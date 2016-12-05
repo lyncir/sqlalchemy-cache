@@ -1,25 +1,16 @@
 # -*- coding: utf-8 -*-
 
 import time
-import redis
-from werkzeug.contrib.cache import RedisCache
 from sqlalchemy import create_engine, Column, String, Integer, DateTime
-from sqlalchemy.orm import scoped_session, sessionmaker
 from sqlalchemy.ext.declarative import declarative_base
 
-from sqlalchemy_cache import FromCache, CachingQuery
+from sqlalchemy_cache import FromCache, Cache, create_scoped_session
 
 
 Base = declarative_base()
-regions = {}
-Session = scoped_session(
-                sessionmaker(
-                    query_cls=query_callable(regions)
-                )
-            )
-engine = create_engine('mysql://lyncir:ccm_86955516@192.168.1.200/test')
-Session.configure(bind=engine)()
-cache = RedisCache()
+engine = create_engine('mysql://root@localhost/test', isolation_level="SERIALIZABLE")
+session = create_scoped_session(engine)
+cache = Cache()
 
 
 def _get_timestamp(self):
@@ -37,8 +28,17 @@ class User(Base):
 
 
 def test_cache():
-    user = Session.query(User).options(FromCache()).filter_by(name='root').one()
-    print user.__dict__
+    query = session.query(User).filter_by(name='root')
+    cache_query = query.options(FromCache(cache))
+    
+    # no cache
+    print query.one().count
+
+    # cache
+    print cache_query.one().count
+
+    # invalidate cache 
+    print cache_query.invalidate()
 
 
 def main():

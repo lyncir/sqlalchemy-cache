@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from hashlib import md5
+from werkzeug.contrib.cache import RedisCache
 from sqlalchemy.orm.interfaces import MapperOption
 from sqlalchemy.orm.query import Query
 
@@ -77,7 +78,7 @@ class CachingQuery(Query):
         cache, cache_key = self._get_cache_plus_key()
         cache.set(cache_key, value)
 
-    def key_from_query(sel, qualifier=None):
+    def key_from_query(self, qualifier=None):
         """
         Given a Query, create a cache key.
         There are many approaches to this; here we use the simplest, which is
@@ -91,25 +92,130 @@ class CachingQuery(Query):
         compiled = stmt.compile()
         params = compiled.params
 
-        values = [str(comliled)]
+        values = [str(compiled)]
         for k in sorted(params):
             values.append(repr(params[k]))
         key = u" ".join(values)
         return md5(key.encode('utf8')).hexdigest()
 
 
-class FromCache(MapperOption):
-
-    propagate_to_loaders = False
+class _CacheableMapperOption(MapperOption):
 
     def __init__(self, cache, cache_key=None):
-        self.cache = cache 
+        """
+        Construct a new `_CacheableMapperOption`.
+        :param cache: the cache.  Should be a Flask-Cache instance.
+        :param cache_key: optional.  A string cache key that will serve as
+        the key to the query. Use this if your query has a huge amount of
+        parameters (such as when using in_()) which correspond more simply to
+        some other identifier.
+        """
+        self.cache = cache
         self.cache_key = cache_key
 
-    def process_query(self, query):
-        query._cache = self
-
     def __getstate__(self):
+        """
+        Flask-Cache instance is not picklable because it has references
+        to Flask.app. Also, I don't want it cached.
+        """
         d = self.__dict__.copy()
         d.pop('cache', None)
         return d
+
+
+class FromCache(_CacheableMapperOption):
+    """Specifies that a Query should load results from a cache."""
+
+    propagate_to_loaders = False
+
+    def process_query(self, query):
+        """Process a Query during normal loading operation."""
+        query._cache = self
+
+
+class RelationshipCache(_CacheableMapperOption):
+    """
+    Specifies that a Query as called within a "lazy load" should load
+    results from a cache.
+    """
+
+    propagate_to_loaders = True
+
+    def __init__(self, attribute, cache, cache_key=None):
+        """
+        Construct a new RelationshipCache.
+        :param attribute: A Class.attribute which indicates a particular
+        class relationship() whose lazy loader should be pulled from the cache.
+        :param cache_key: optional.  A string cache key that will serve as the
+        key to the query, bypassing the usual means of forming a key from the
+        Query itself.
+        """
+        super(RelationshipCache, self).__init__(cache, cache_key)
+        self._relationship_options = {
+            (attribute.property.parent.class_, attribute.property.key): self
+        }
+
+    def process_query_conditionally(self, query):
+        """
+        Process a Query that is used within a lazy loader.
+        (the process_query_conditionally() method is a SQLAlchemy
+        hook invoked only within lazyload.)
+        """
+        if query._current_path:
+            mapper, prop = query._current_path[-2:]
+            for cls in mapper.class_.__mro__:
+                k = (cls, prop.key)
+                relationship_option = self._relationship_options.get(k)
+                if relationship_option:
+                    query._cache = relationship_option
+                    break
+
+    def and_(self, option):
+        """
+        Chain another RelationshipCache option to this one.
+        While many RelationshipCache objects can be specified on a single
+        Query separately, chaining them together allows for a more efficient
+        lookup during load.
+        """
+        self._relationship_options.update(option._relationship_options)
+        return self
+
+
+class Cache(object):
+
+    def __init__(self, host='localhost', port=6379, password=None, db=0,
+            default_timeout=300, key_prefix=None, **kwargs):
+        self.cache = RedisCache(host, port, password, db, default_timeout,
+            key_prefix, **kwargs)
+
+    def get(self, *args, **kwargs):
+        "Proxy function for internal cache object."
+        return self.cache.get(*args, **kwargs)
+
+    def set(self, *args, **kwargs):
+        "Proxy function for internal cache object."
+        self.cache.set(*args, **kwargs)
+
+    def add(self, *args, **kwargs):
+        "Proxy function for internal cache object."
+        self.cache.add(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        "Proxy function for internal cache object."
+        self.cache.delete(*args, **kwargs)
+
+    def delete_many(self, *args, **kwargs):
+        "Proxy function for internal cache object."
+        self.cache.delete_many(*args, **kwargs)
+
+    def clear(self):
+        "Proxy function for internal cache object."
+        self.cache.clear()
+
+    def get_many(self, *args, **kwargs):
+        "Proxy function for internal cache object."
+        return self.cache.get_many(*args, **kwargs)
+
+    def set_many(self, *args, **kwargs):
+        "Proxy function for internal cache object."
+        self.cache.set_many(*args, **kwargs)

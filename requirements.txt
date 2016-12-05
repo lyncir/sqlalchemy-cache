@@ -1,0 +1,4 @@
+MySQL-python
+SQLAlchemy
+Werkzeug
+redis
