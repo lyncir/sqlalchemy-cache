@@ -1,5 +1,5 @@
-MySQL-python
-SQLAlchemy
-Werkzeug
-redis
-pytest
+MySQL-python==1.2.5
+SQLAlchemy==1.1.4
+Werkzeug==0.11.11
+redis==2.10.5
+pytest==2.6.3
