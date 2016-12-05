@@ -4,8 +4,8 @@ SQLAlchemy Cache
   :target: https://travis-ci.org/lyncir/sqlalchemy-cache
   :alt: Build Status
 
- * use redis
- * user SQLAlchemy
+* use redis
+* user SQLAlchemy
 
 
 Ref:
