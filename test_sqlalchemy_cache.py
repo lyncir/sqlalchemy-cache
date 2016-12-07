@@ -10,7 +10,7 @@ from sqlalchemy_cache import FromCache, Cache, create_scoped_session
 
 Base = declarative_base()
 engine = create_engine('mysql://root@localhost/test', isolation_level="SERIALIZABLE")
-session = create_scoped_session(engine, autocommit=True)()
+session = create_scoped_session(engine)
 cache = Cache()
 
 
