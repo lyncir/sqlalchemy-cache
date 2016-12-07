@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
+import pickle
 from hashlib import md5
-from werkzeug.contrib.cache import RedisCache
+from redis import StrictRedis
 from sqlalchemy.orm.interfaces import MapperOption
 from sqlalchemy.orm.query import Query
 
@@ -9,6 +10,7 @@ from sqlalchemy.orm.query import Query
 class CachingQuery(Query):
     """
     A Query subclass which optionally loads full results from cache.
+
     The CachingQuery optionally stores additional state that allows it to
     consult a cache before accessing the database, in the form of a FromCache
     or RelationshipCache object.
@@ -59,9 +61,7 @@ class CachingQuery(Query):
             "Can't ignore expiration and also provide createfunc"
 
         if ignore_expiration or not createfunc:
-            cached_value = cache.get(cache_key,
-                                     expiration_time=expiration_time,
-                                     ignore_expiration=ignore_expiration)
+            cached_value = cache.get(cache_key)
         else:
             cached_value = cache.get(cache_key)
             if not cached_value:
@@ -76,6 +76,12 @@ class CachingQuery(Query):
     def set_value(self, value):
         """Set the value in the cache for this query."""
         cache, cache_key = self._get_cache_plus_key()
+        cache.set(cache_key, value)
+
+    def update_value(self, query):
+        cache, cache_key = self._get_cache_plus_key()
+        createfunc = lambda: list(query.__iter__())
+        value = createfunc()
         cache.set(cache_key, value)
 
     def key_from_query(self, qualifier=None):
@@ -104,7 +110,7 @@ class _CacheableMapperOption(MapperOption):
     def __init__(self, cache, cache_key=None):
         """
         Construct a new `_CacheableMapperOption`.
-        :param cache: the cache.  Should be a Flask-Cache instance.
+        :param cache: the cache.  Should be a StrictRedis instance.
         :param cache_key: optional.  A string cache key that will serve as
         the key to the query. Use this if your query has a huge amount of
         parameters (such as when using in_()) which correspond more simply to
@@ -112,15 +118,6 @@ class _CacheableMapperOption(MapperOption):
         """
         self.cache = cache
         self.cache_key = cache_key
-
-    def __getstate__(self):
-        """
-        Flask-Cache instance is not picklable because it has references
-        to Flask.app. Also, I don't want it cached.
-        """
-        d = self.__dict__.copy()
-        d.pop('cache', None)
-        return d
 
 
 class FromCache(_CacheableMapperOption):
@@ -183,39 +180,56 @@ class RelationshipCache(_CacheableMapperOption):
 
 class Cache(object):
 
-    def __init__(self, host='localhost', port=6379, password=None, db=0,
-            default_timeout=300, key_prefix=None, **kwargs):
-        self.cache = RedisCache(host, port, password, db, default_timeout,
-            key_prefix, **kwargs)
+    def __init__(self, host='localhost', port=6379, db=0, password=None,
+            default_timeout=300, **kwargs):
+        self.default_timeout = default_timeout
+        self.cache = StrictRedis(host, port, db, password, **kwargs)
 
-    def get(self, *args, **kwargs):
-        "Proxy function for internal cache object."
-        return self.cache.get(*args, **kwargs)
+    def _normalize_timeout(self, timeout):
+        if timeout is None:
+            timeout = self.default_timeout
+        if timeout == 0:
+            timeout = -1
+        return timeout
 
-    def set(self, *args, **kwargs):
-        "Proxy function for internal cache object."
-        self.cache.set(*args, **kwargs)
+    def dump_object(self, value):
+        t = type(value)
+        if t in (int, long):
+            return str(value).encode('ascii')
+        return b'!' + pickle.dumps(value)
 
-    def add(self, *args, **kwargs):
-        "Proxy function for internal cache object."
-        self.cache.add(*args, **kwargs)
+    def load_object(self, value):
+        if value is None:
+            return None
+        if value.startswith(b'!'):
+            try:
+                return pickle.loads(value[1:])
+            except pickle.PickleError:
+                return None
+        try:
+            return int(value)
+        except ValueError:
+            return value
 
-    def delete(self, *args, **kwargs):
-        "Proxy function for internal cache object."
-        self.cache.delete(*args, **kwargs)
+    def get(self, key):
+        return self.load_object(self.cache.get(name=key))
 
-    def delete_many(self, *args, **kwargs):
-        "Proxy function for internal cache object."
-        self.cache.delete_many(*args, **kwargs)
+    def set(self, key, value, timeout=None):
+        timeout = self._normalize_timeout(timeout)
+        dump = self.dump_object(value)
+        if timeout == -1:
+            result = self.cache.set(name=key, value=dump)
+        else:
+            result = self.cache.setex(name=key, value=dump, time=timeout)
+        return result
 
-    def clear(self):
-        "Proxy function for internal cache object."
-        self.cache.clear()
+    def add(self, key, value, timeout=None):
+        timeout = self._normalize_timeout(timeout)
+        dump = self.dump_object(value)
+        return (
+            self.cache.setnx(name=key, value=dump) and
+            self.cache.expire(name=key, time=timeout)
+        )
 
-    def get_many(self, *args, **kwargs):
-        "Proxy function for internal cache object."
-        return self.cache.get_many(*args, **kwargs)
-
-    def set_many(self, *args, **kwargs):
-        "Proxy function for internal cache object."
-        self.cache.set_many(*args, **kwargs)
+    def delete(self, key):
+        return self.cache.delete(key)

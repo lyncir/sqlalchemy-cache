@@ -5,7 +5,7 @@ from sqlalchemy.orm import scoped_session, sessionmaker
 from .core import FromCache, CachingQuery, Cache
 
 
-def create_scoped_session(engine, options=None):
+def create_scoped_session(engine, options=None, autocommit=False):
     """Create a :class:`~sqlalchemy.orm.scoping.scoped_session`"""
     if options is None:
         options = {}
@@ -14,5 +14,5 @@ def create_scoped_session(engine, options=None):
     session = scoped_session(
                     sessionmaker(**options)
                 )
-    session.configure(bind=engine)
+    session.configure(bind=engine, autocommit=autocommit)
     return session
