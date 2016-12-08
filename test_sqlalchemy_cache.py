@@ -10,7 +10,7 @@ from sqlalchemy_cache import FromCache, Cache, create_scoped_session
 
 Base = declarative_base()
 engine = create_engine('mysql://root@localhost/test', isolation_level="SERIALIZABLE")
-session = create_scoped_session(engine)
+session = create_scoped_session(engine, autocommit=True)
 cache = Cache()
 
 
@@ -31,9 +31,9 @@ class User(Base):
 @pytest.fixture
 def init_db():
     User.__table__.create(engine)
-    user = User(id=1, name="root", desc="test", count=0, created_at=_get_timestamp)
+    user = User(id=1, name="root", desc="test", count=500, created_at=_get_timestamp)
     session.add(user)
-    session.commit()
+    #session.commit()
 
 
 def test_sqlalchemy_cache(init_db):

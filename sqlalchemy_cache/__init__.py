@@ -2,7 +2,7 @@
 
 from sqlalchemy.orm import scoped_session, sessionmaker
 
-from .core import FromCache, CachingQuery, Cache, lock, Lock
+from .core import FromCache, CachingQuery, Cache, Lock
 
 
 def create_scoped_session(engine, options=None, autocommit=False):

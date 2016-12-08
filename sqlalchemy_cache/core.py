@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 
+import uuid
 import pickle
 from hashlib import md5
-from contextlib import contextmanager
 from redis import StrictRedis
 from sqlalchemy.orm.interfaces import MapperOption
 from sqlalchemy.orm.query import Query
@@ -49,7 +49,7 @@ class CachingQuery(Query):
     def invalidate(self):
         """Invalidate the cache value represented by this Query."""
         cache, cache_key = self._get_cache_plus_key()
-        cache.delete(cache_key)
+        cache._delete(cache_key)
 
     def get_value(self, merge=True, createfunc=None,
                   expiration_time=None, ignore_expiration=False):
@@ -62,12 +62,12 @@ class CachingQuery(Query):
             "Can't ignore expiration and also provide createfunc"
 
         if ignore_expiration or not createfunc:
-            cached_value = cache.get(cache_key)
+            cached_value = cache._get(cache_key)
         else:
-            cached_value = cache.get(cache_key)
+            cached_value = cache._get(cache_key)
             if not cached_value:
                 cached_value = createfunc()
-                cache.set(cache_key, cached_value, timeout=expiration_time)
+                cache._set(cache_key, cached_value, timeout=expiration_time)
 
         if cached_value and merge:
             cached_value = self.merge_result(cached_value, load=False)
@@ -77,13 +77,13 @@ class CachingQuery(Query):
     def set_value(self, value):
         """Set the value in the cache for this query."""
         cache, cache_key = self._get_cache_plus_key()
-        cache.set(cache_key, value)
+        cache._set(cache_key, value)
 
     def update_value(self, query):
         cache, cache_key = self._get_cache_plus_key()
         createfunc = lambda: list(query.__iter__())
         value = createfunc()
-        cache.set(cache_key, value)
+        cache._set(cache_key, value)
 
     def key_from_query(self, qualifier=None):
         """
@@ -218,7 +218,7 @@ class Cache(object):
         except ValueError:
             return value
 
-    def get(self, key):
+    def _get(self, key):
         key_str = self.cache.get(key)
         if key_str is None:
             return None
@@ -229,7 +229,7 @@ class Cache(object):
             value.append(v)
         return value
 
-    def set(self, key, value, timeout=None):
+    def _set(self, key, value, timeout=None):
         timeout = self._normalize_timeout(timeout)
         if isinstance(value, list):
             key_l = []
@@ -257,8 +257,14 @@ class Cache(object):
             self.cache.expire(name=key, time=timeout)
         )
 
-    def delete(self, key):
+    def _delete(self, key):
+        v_k = self.cache.get(key)
+        for k in v_k.split(','):
+            self.cache.delete(k)
         return self.cache.delete(key)
+
+    def delete(self, *args, **kwargs):
+        return self.cache.delete(*args, **kwargs)
 
     def blpop(self, *args, **kwargs):
         return self.cache.blpop(*args, **kwargs)
@@ -272,6 +278,24 @@ class Cache(object):
     def getset(self, *args, **kwargs):
         return self.cache.getset(*args, **kwargs)
 
+    def exists(self, *args, **kwargs):
+        return self.cache.exists(*args, **kwargs)
+
+    def hset(self, *args, **kwargs):
+        return self.cache.hset(*args, **kwargs)
+
+    def pexpire(self, *args, **kwargs):
+        return self.cache.pexpire(*args, **kwargs)
+
+    def hexists(self, *args, **kwargs):
+        return self.cache.hexists(*args, **kwargs)
+
+    def hincrby(self, *args, **kwargs):
+        return self.cache.hincrby(*args, **kwargs)
+
+    def pttl(self, *args, **kwargs):
+        return self.cache.pttl(*args, **kwargs)
+
 
 class Lock(object):
     """Lock implemented on top of redis."""
@@ -279,52 +303,48 @@ class Lock(object):
     def __init__(self, client, name, timeout=60, db=0):
         """
         Create, if necessary the lock variable in redis.
-        We utilize the ``blpop`` command and its blocking behavior.
-        The ``_key`` variable is used to check, whether the mutex exists or not,
-        while the ``_mutex`` variable is the actual mutex.
         """
         self._key = 'lock:name:%s' % name
-        self._mutex = 'lock:mutex:%s' % name
         self._timeout = timeout
         self._r = client
-        self._init_mutex()
-
-    @property
-    def mutex_key(self):
-        return self._mutex
+        self._uuid4 = uuid.uuid4()
 
     def lock(self):
         """
         Lock and block.
 
-         Raises:
-             RuntimeError, in case of synchronization issues.
+        Return: None -> get a lock. long -> have a lock, get time
         """
-        res = self._r.blpop(self._mutex, self._timeout)
-        if res is None:
-            raise RuntimeError
+        # 检查是否key已经被占用，如果没有则设置超时时间和唯一标识，初始化value=1
+        if self._r.exists(self._key) == 0:
+            self._r.hset(self._key, self._uuid4, 1)
+            self._r.pexpire(self._key, self._timeout)
+            return None
+        # 如果锁重入,需要判断锁的key field 都一致情况下 value 加1
+        if self._r.hexists(self._key, self._uuid4) == 1:
+            self._r.hincrby(self._key, self._uuid4, 1)
+            self._r.pexpire(self._key, self._timeout)
+            return None
+        return self._r.pttl(self._key)
 
     def unlock(self):
-        self._r.rpush(self._mutex, 1)
-
-    def _init_mutex(self):
         """
-        Initialize the mutex, if necessary.
+        Unlock
 
-        Use a separate key to check for the existence of the "mutex",
-        so that we can utilize ``getset``, which is atomic.
+        Return: 1 -> unlock a key, None -> unlock failed
         """
-        exists = self._r.getset(self._key, 1)
-        if exists is None:
-            self._r.lpush(self._mutex, 1)
-
-
-@contextmanager
-def lock(client, name, timeout=60):
-    """Lock on name using redis."""
-    l = Lock(client, name, timeout)
-    try:
-        l.lock()
-        yield
-    finally:
-        l.unlock()
+        # 如果key已经不存在，说明已经被解锁
+        if self._r.exists(self._key) == 0:
+            return 1
+        # key和field不匹配，说明当前客户端线程没有持有锁，不能主动解锁。
+        if self._r.hexists(self._key, self._uuid4) == 0:
+            return None
+        lock_count = self._r.hincrby(self._key, self._uuid4, -1)
+        # 如果counter>0说明锁在重入，不能删除key
+        if lock_count > 0:
+            self._r.pexpire(self._key, self._timeout)
+            return 0
+        else:
+            self._r.delete(self._key)
+            return 1
+        return None
