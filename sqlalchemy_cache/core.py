@@ -193,6 +193,12 @@ class Cache(object):
             timeout = -1
         return timeout
 
+    def row2dict(self, row):
+        d = {}
+        for column in row.__table__.columns:
+            d[column.name] = getattr(row, column.name)
+        return d
+
     def dump_object(self, value):
         t = type(value)
         if t in (int, long):
@@ -213,16 +219,35 @@ class Cache(object):
             return value
 
     def get(self, key):
-        return self.load_object(self.cache.get(name=key))
+        key_str = self.cache.get(key)
+        if key_str is None:
+            return None
+        key_l = key_str.split(",")
+        value = []
+        for v_key in key_l:
+            v = self.load_object(self.cache.get(name=v_key))
+            value.append(v)
+        return value
 
     def set(self, key, value, timeout=None):
         timeout = self._normalize_timeout(timeout)
-        dump = self.dump_object(value)
-        if timeout == -1:
-            result = self.cache.set(name=key, value=dump)
-        else:
-            result = self.cache.setex(name=key, value=dump, time=timeout)
-        return result
+        if isinstance(value, list):
+            key_l = []
+            for v in value:
+                v_key = ":".join([v.__tablename__, str(v.id)])
+                dump = self.dump_object(v)
+                if timeout == -1:
+                    res = self.cache.set(name=v_key, value=dump)
+                else:
+                    res = self.cache.setex(name=v_key, value=dump, time=timeout)
+                key_l.append(v_key)
+
+            key_str = ",".join(key_l)
+            if timeout == -1:
+                result = self.cache.set(name=key, value=key_str)
+            else:
+                result = self.cache.setex(name=key, value=key_str, time=timeout)
+            return result
 
     def add(self, key, value, timeout=None):
         timeout = self._normalize_timeout(timeout)

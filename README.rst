@@ -1,14 +1,26 @@
+===================
 SQLAlchemy Cache
+===================
 
 .. image:: https://travis-ci.org/lyncir/sqlalchemy-cache.svg?branch=master
   :target: https://travis-ci.org/lyncir/sqlalchemy-cache
   :alt: Build Status
 
-* use redis
-* user SQLAlchemy
+Required
+===================
+
+- use redis
+- user SQLAlchemy
 
 
-Ref:
- * Flask-Cache
- * Flask-SQLAlchemy
- * Flask-SQLAlchemy-Cache
+Storage
+===================
+
+::
+    key                 value
+    sql(md5)            result(str). eg. table:id, ...
+    table:id            sql value pickle
+
+Usage
+===================
+1. don't support use sqlalchemy get by id.
