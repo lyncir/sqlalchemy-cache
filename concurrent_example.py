@@ -16,7 +16,7 @@ def update_user(d):
         s_q = s.options(FromCache(cache))
         user_q = s_q.one()
         if user_q.count + d['count'] >= 0:
-            l = Lock(cache, 'user', 100)
+            l = Lock(cache, s_q.key_from_query(), 100)
             kl = l.lock()
             if kl is None:
                 print user_q.count, d['count']
