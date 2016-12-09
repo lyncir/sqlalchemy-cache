@@ -22,6 +22,7 @@ def update_user(d):
                 print user_q.count, d['count']
                 user = s.one()
                 user.count += d['count']
+                session.commit()
                 s_q.update_value(s)
                 l.unlock()
                 time.sleep(0.1)
@@ -30,6 +31,8 @@ def update_user(d):
                 s = kl/1000.0
                 time.sleep(s)
                 update_user(d)
+        else:
+            session.commit()
     except:
         print traceback.format_exc()
 
