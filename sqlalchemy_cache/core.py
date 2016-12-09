@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import time
 import uuid
 import pickle
 from hashlib import md5
@@ -305,18 +306,23 @@ class Cache(object):
 class Lock(object):
     """Lock implemented on top of redis."""
 
-    def __init__(self, client, name, timeout=60, db=0):
+    def __init__(self, client, name, timeout=0.1, db=0):
         """
         Create, if necessary the lock variable in redis.
+
+        :param client: redis client
+        :param name: redis key
+        :param timeout: second
+        :param db: redis db
         """
         self._key = 'lock:name:%s' % name
-        self._timeout = timeout
+        self._timeout = int(timeout * 1000)
         self._r = client
         self._uuid4 = uuid.uuid4()
 
-    def lock(self):
+    def acquire(self):
         """
-        Lock and block.
+        Acquire
 
         Return: None -> get a lock. long -> have a lock, get time
         """
@@ -331,6 +337,27 @@ class Lock(object):
             self._r.pexpire(self._key, self._timeout)
             return None
         return self._r.pttl(self._key)
+
+    def lock(self):
+        # 申请锁，返回还剩余的锁过期时间
+        ttl = self.acquire()
+        # 如果为空，表示申请锁成功
+        if ttl is None:
+            return True
+
+        while True:
+            # 再次尝试一次申请锁
+            ttl = self.acquire()
+            # 获得锁，返回
+            if ttl is None:
+                return True
+
+            # 等待锁
+            if ttl >= 0:
+                sec = ttl / 1000.0
+                time.sleep(sec)
+            else:
+                return False
 
     def unlock(self):
         """

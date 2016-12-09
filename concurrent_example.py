@@ -16,19 +16,19 @@ def update_user(d):
         s_q = s.options(FromCache(cache))
         user_q = s_q.one()
         if user_q.count + d['count'] >= 0:
-            l = Lock(cache, s_q.key_from_query(), 100)
-            kl = l.lock()
+            l = Lock(cache, s_q.key_from_query())
+            kl = l.acquire()
             if kl is None:
                 print user_q.count, d['count']
                 user = s.one()
                 user.count += d['count']
                 s_q.update_value(s)
                 l.unlock()
-                time.sleep(1)
+                time.sleep(0.1)
             elif kl >= 0:
                 print d['count']
                 s = kl/1000.0
-                time.sleep(kl/1000.0)
+                time.sleep(s)
                 update_user(d)
     except:
         print traceback.format_exc()
