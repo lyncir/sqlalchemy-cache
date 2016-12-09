@@ -263,6 +263,11 @@ class Cache(object):
             self.cache.delete(k)
         return self.cache.delete(key)
 
+    def set(self, *args, **kwargs):
+        return self.cache.set(*args, **kwargs)
+    def get(self, *args, **kwargs):
+        return self.cache.get(*args, **kwargs)
+
     def delete(self, *args, **kwargs):
         return self.cache.delete(*args, **kwargs)
 
