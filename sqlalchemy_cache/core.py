@@ -380,3 +380,18 @@ class Lock(object):
             self._r.delete(self._key)
             return 1
         return None
+
+
+class CacheableMixin(object):
+    
+    @declared_attr
+    def cache(cls):
+        return Cache(cls)
+
+    @staticmethod
+    def _flush_event(mapper, connection, target):
+        target.cache._flush_all(target)
+
+    @classmethod
+    def __declare_last__(cls):
+        event.listen(cls, 'before_update', cls._flush_event)
