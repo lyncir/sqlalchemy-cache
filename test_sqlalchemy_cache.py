@@ -5,13 +5,12 @@ import pytest
 from sqlalchemy import create_engine, Column, String, Integer, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 
-from sqlalchemy_cache import FromCache, Cache, create_scoped_session, CacheableMixin
+from sqlalchemy_cache import FromCache, create_scoped_session, CacheableMixin
 
 
 Base = declarative_base()
 engine = create_engine('mysql://root@localhost/test', isolation_level="SERIALIZABLE")
 session = create_scoped_session(engine, autocommit=False)
-cache = Cache()
 
 
 def _get_timestamp(self):

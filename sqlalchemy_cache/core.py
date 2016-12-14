@@ -68,8 +68,8 @@ class CachingQuery(Query):
                 cached_value = createfunc()
                 cache._set(cache_key, cached_value, timeout=expiration_time)
 
-        if cached_value and merge:
-            cached_value = self.merge_result(cached_value, load=False)
+        #if cached_value and merge:
+        #    cached_value = self.merge_result(cached_value, load=False)
 
         return cached_value
 
