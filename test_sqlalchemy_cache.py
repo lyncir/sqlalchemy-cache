@@ -5,7 +5,7 @@ import pytest
 from sqlalchemy import create_engine, Column, String, Integer, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 
-from sqlalchemy_cache import FromCache, Cache, create_scoped_session
+from sqlalchemy_cache import FromCache, Cache, create_scoped_session, CacheableMixin
 
 
 Base = declarative_base()
@@ -18,7 +18,7 @@ def _get_timestamp(self):
     return time.time()
 
 
-class User(Base):
+class User(Base, CacheableMixin):
     __tablename__ = 'user'
 
     id = Column(Integer, primary_key=True)
@@ -40,7 +40,7 @@ def test_sqlalchemy_cache(init_db):
 
     # query
     query = session.query(User).filter_by(name='root')
-    cache_query = query.options(FromCache(cache))
+    cache_query = query.options(FromCache(User.cache))
     
     # no cache
     name = query.one().name
@@ -49,8 +49,3 @@ def test_sqlalchemy_cache(init_db):
     # cache
     cache_name = cache_query.one().name
     assert cache_name == "root"
-
-    # invalidate cache 
-    cache_query.invalidate()
-    key = cache_query.key_from_query()
-    assert cache.get(key) == None
