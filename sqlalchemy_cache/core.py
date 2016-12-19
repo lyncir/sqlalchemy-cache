@@ -5,7 +5,10 @@ import uuid
 import pickle
 from hashlib import md5
 from redis import StrictRedis
+from sqlalchemy import event
 from sqlalchemy.orm.interfaces import MapperOption
+from sqlalchemy.orm.attributes import get_history
+from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm.query import Query
 
 
@@ -47,11 +50,6 @@ class CachingQuery(Query):
         key = getattr(self, '_cache_key', self.key_from_query())
         return self._cache.cache, key
 
-    def invalidate(self):
-        """Invalidate the cache value represented by this Query."""
-        cache, cache_key = self._get_cache_plus_key()
-        cache._delete(cache_key)
-
     def get_value(self, merge=True, createfunc=None,
                   expiration_time=None, ignore_expiration=False):
         """
@@ -70,21 +68,10 @@ class CachingQuery(Query):
                 cached_value = createfunc()
                 cache._set(cache_key, cached_value, timeout=expiration_time)
 
-        if cached_value and merge:
-            cached_value = self.merge_result(cached_value, load=False)
+        #if cached_value and merge:
+        #    cached_value = self.merge_result(cached_value, load=False)
 
         return cached_value
-
-    def set_value(self, value):
-        """Set the value in the cache for this query."""
-        cache, cache_key = self._get_cache_plus_key()
-        cache._set(cache_key, value)
-
-    def update_value(self, query):
-        cache, cache_key = self._get_cache_plus_key()
-        createfunc = lambda: list(query.__iter__())
-        value = createfunc()
-        cache._set(cache_key, value)
 
     def key_from_query(self, qualifier=None):
         """
@@ -183,9 +170,13 @@ class RelationshipCache(_CacheableMapperOption):
 class Cache(object):
 
     def __init__(self, host='localhost', port=6379, db=0, password=None,
-            default_timeout=300, **kwargs):
+            default_timeout=300, model=None, key_prefix='query', **kwargs):
+        self.model = model
         self.default_timeout = default_timeout
         self.cache = StrictRedis(host, port, db, password, **kwargs)
+        # 自定义主键或默认id
+        self.pk = getattr(model, 'cache_pk', 'id')
+        self.key_prefix = key_prefix
 
     def _normalize_timeout(self, timeout):
         if timeout is None:
@@ -219,8 +210,30 @@ class Cache(object):
         except ValueError:
             return value
 
+    def _set_setex(self, key, value, timeout=None):
+        """
+        set or setex with timeout
+        """
+        timeout = self._normalize_timeout(timeout)
+        if timeout == -1:
+            result = self.cache.set(name=key, value=value)
+        else:
+            result = self.cache.setex(name=key, value=value, time=timeout)
+        return result
+
+    def _set_row(self, value, timeout=None):
+        """
+        set row with dump value
+        """
+        timeout = self._normalize_timeout(timeout)
+        v_key = ":".join([self.model.__tablename__, self.pk, str(getattr(value, self.pk))])
+        v_value = self.dump_object(value)
+        self._set_setex(v_key, v_value, timeout)
+        return v_key
+
     def _get(self, key):
-        key_str = self.cache.get(key)
+        new_key = ":".join([self.key_prefix, self.model.__tablename__, key])
+        key_str = self.cache.get(new_key)
         if key_str is None:
             return None
         key_l = key_str.split(",")
@@ -235,37 +248,16 @@ class Cache(object):
         if isinstance(value, list):
             key_l = []
             for v in value:
-                v_key = ":".join([v.__tablename__, str(v.id)])
-                dump = self.dump_object(v)
-                if timeout == -1:
-                    res = self.cache.set(name=v_key, value=dump)
-                else:
-                    res = self.cache.setex(name=v_key, value=dump, time=timeout)
+                v_key = self._set_row(v) 
                 key_l.append(v_key)
 
             key_str = ",".join(key_l)
-            if timeout == -1:
-                result = self.cache.set(name=key, value=key_str)
-            else:
-                result = self.cache.setex(name=key, value=key_str, time=timeout)
-            return result
-
-    def add(self, key, value, timeout=None):
-        timeout = self._normalize_timeout(timeout)
-        dump = self.dump_object(value)
-        return (
-            self.cache.setnx(name=key, value=dump) and
-            self.cache.expire(name=key, time=timeout)
-        )
-
-    def _delete(self, key):
-        v_k = self.cache.get(key)
-        for k in v_k.split(','):
-            self.cache.delete(k)
-        return self.cache.delete(key)
+            new_key = ":".join([self.key_prefix, self.model.__tablename__, key])
+            self._set_setex(key=new_key, value=key_str)
 
     def set(self, *args, **kwargs):
         return self.cache.set(*args, **kwargs)
+
     def get(self, *args, **kwargs):
         return self.cache.get(*args, **kwargs)
 
@@ -301,6 +293,46 @@ class Cache(object):
 
     def pttl(self, *args, **kwargs):
         return self.cache.pttl(*args, **kwargs)
+
+    def scan_iter(self, *args, **kwargs):
+        return self.cache.scan_iter(*args, **kwargs)
+
+    def _columns(self):
+        return [c.name for c in self.model.__table__.columns if c.name == self.pk]
+
+    def _delete(self, obj):
+        """
+        sqlalchemy delete event 
+        1. 清除row缓存 table:id:1
+        2. 清除query缓存 query:table:md5
+        """
+        for column in self._columns():
+             added, unchanged, deleted = get_history(obj, column)
+             for value in list(deleted) + list(added) + list(unchanged):
+                 key = ":".join([self.model.__tablename__, column, str(value)])
+                 self.delete(key)
+
+        query_key = ":".join([self.key_prefix, self.model.__tablename__, "*"])
+        for key in self.scan_iter(query_key):
+            self.delete(key)
+
+    def _insert(self, obj):
+        """
+        sqlalchemy insert event 
+        1. 清除query缓存 query:table:md5
+        """
+        query_key = ":".join([self.key_prefix, self.model.__tablename__, "*"])
+        for key in self.scan_iter(query_key):
+            self.delete(key)
+
+    def _update(self, obj):
+        """
+        sqlalchemy update event
+        1. 更新row缓存 table.id.1
+        """
+        key = ":".join([self.model.__tablename__, self.pk, str(getattr(obj, self.pk))])
+        if self.exists(key):
+            self._set_row(obj)
 
 
 class Lock(object):
@@ -380,3 +412,31 @@ class Lock(object):
             self._r.delete(self._key)
             return 1
         return None
+
+
+class CacheableMixin(object):
+
+    @declared_attr
+    def cache(cls):
+        return Cache(model=cls)
+
+    @staticmethod
+    def _delete_event(mapper, connection, target):
+        target.cache._delete(target)
+
+    @staticmethod
+    def _insert_event(mapper, connection, target):
+        target.cache._insert(target)
+
+    @staticmethod
+    def _update_event(mapper, connection, target):
+        target.cache._update(target)
+
+    @classmethod
+    def __declare_last__(cls):
+        """
+        监听增，删，改事件，并进行相应的缓存更新
+        """
+        event.listen(cls, 'before_insert', cls._insert_event)
+        event.listen(cls, 'before_delete', cls._delete_event)
+        event.listen(cls, 'before_update', cls._update_event)

@@ -6,14 +6,14 @@ import time
 import random
 from multiprocessing import Pool
 
-from test_sqlalchemy_cache import session, User, cache
+from test_sqlalchemy_cache import session, User
 from sqlalchemy_cache import FromCache, Lock
 
 
 def update_user(d):
     try:
         s = session.query(User).filter_by(id=d['id']).with_lockmode('update')
-        s_q = s.options(FromCache(cache))
+        s_q = s.options(FromCache(User.cache))
         user_q = s_q.one()
         if user_q.count + d['count'] >= 0:
             l = Lock(cache, s_q.key_from_query())
@@ -23,7 +23,6 @@ def update_user(d):
                 user = s.one()
                 user.count += d['count']
                 session.commit()
-                s_q.update_value(s)
                 l.unlock()
                 time.sleep(0.1)
             elif kl >= 0:
@@ -39,7 +38,7 @@ def update_user(d):
 
 def main():
     infos = []
-    for i in xrange(1, 1000):
+    for i in xrange(1, 100):
         infos.append(
             {
             'id': 1,
